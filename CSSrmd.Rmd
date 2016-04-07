@@ -1,0 +1,127 @@
+---
+title: "CSS bird exclusion"
+author: "cnell"
+date: "April 4, 2016"
+output: html_document
+runtime: shiny
+---
+```{r,loadup,echo=F,warning=F}
+
+library(ggplot2)
+library(dplyr)
+library(car)
+library(reshape2)
+setwd("/Users/colleennell/Documents/R/CSS/data")
+clean<-read.csv("CSS_matrix_cleaned.csv")
+
+
+std <- function(x) sd(x)/sqrt(length(x))
+```
+##Contents  
+1. Data Description  
+2. Arthropod density results
+    a. All arthropods by plant species, bird exclusion treatment
+    b. Same, just herbivores
+    c. Same, predators
+    d. Relationship of herbivores & predators  
+3. Arthropod community composition analyses  
+4. Indirect defense from birds
+<br>  
+
+###1. Data Description  
+These data are from a field experiment conducted at the former IRC seed farm in Irvine from Feb 2014-June 2014. For 9 plant species, a treatment of bird exclusion netting was applied to 8 experimental plants, paired with 5 control plants with no exclusion netting. After 3 months, the arthropods on the plants were sampled using vaccuum collection and identified to order or subgrouping to determine trophic feeding group. In addition, experimental plants were measured for their size and complexity, as well as host platn quality in a laboratory feeding assay of Spodoptera exigua.   
+
+###2. Arthropod density results
+Do herbivore communities differ among plant species?  
+a.  Arthropod density (all)
+
+```{r, echo=FALSE}
+clean$totalarths<-rowSums(clean[,2:22],na.rm=T)
+clean$WT_plant<-clean$WT_multiplier*clean$WT_sample
+clean$arth_dens<-clean$totalarths/clean$WT_plant
+###arth dens by plant, treat
+cleanmean<-clean%>%
+  group_by(species,treat)%>%
+  summarize(meandens=mean(totalarths),sddens=sd(totalarths))
+
+clean$arth_dens<-clean$arth_dens*1000
+
+###test herbivore density by species, treat
+Anova(lm(clean$arth_dens~clean$species+clean$treat),type="III")
+
+##species,treatment herbivore densities
+#generate means
+sptreatmean<-clean%>%
+  group_by(species,treat)%>%
+  summarize(arthmean=mean(arth_dens),arthse=std(arth_dens))
+densrank<-reorder(sptreatmean$species,sptreatmean$arthmean)
+sptreat<-ggplot(sptreatmean,aes(x=densrank,y=arthmean,group=treat,fill=treat))+
+  geom_bar(stat="identity",position=position_dodge())+
+  labs(x="Plant Species",y="Mean arthropod density",color="Treatment")+
+  geom_errorbar(aes(ymin=arthmean-arthse,ymax=arthmean+arthse),width=.2,position=position_dodge(.9))+
+  scale_fill_manual(values=c("#999999", "#E69F00"), 
+                       name="Treatment",
+                       breaks=c("C", "T"),
+                       labels=c("Birds", "No birds"))+
+  theme_minimal()
+sptreat
+##show means for species,treat
+sptreatmean
+
+```
+<br>  
+b. Herbivore community composition    
+<br>  
+
+```{r,multivarth}
+
+```
+##4. Indirect defense by birds = log(control/bird exclusion)  
+A negative value reflects arthropod removal by birds  
+
+```{r, echo=FALSE}
+##set up df for pooled se calculation + LRR
+sptreatmean<-clean%>%
+  group_by(species,treat)%>%
+  summarize(arthmean=mean(arth_dens),arthse=std(arth_dens),arthsd=sd(arth_dens),
+            n=length(arth_dens))
+forID<-dcast(sptreatmean,species~treat,value.var="arthmean")
+forID2<-dcast(sptreatmean,species~treat,value.var="arthsd")
+forIDn<-dcast(sptreatmean,species~treat,value.var="n")
+forID2$Cse<-forID2$C
+forID2$Tse<-forID2$T
+forID<-left_join(forID,forID2,by="species")
+forIDn$Cn<-forIDn$C
+forIDn$Tn<-forIDn$T
+forID<-left_join(forID,forIDn,by="species")
+
+#bird effects
+forID$ID<-log(forID$C.x/forID$T.x) ##negative value reflects arthropod removal by birds
+forID$IDse<-(sqrt((forID$Cse)^2/(forID$Cn*forID$C.x)+(forID$Tse)^2/(forID$Tn*forID$T.x)))/(forID$Cn+forID$Tn)
+
+##add to plot
+IDrank<-(reorder(forID$species,forID$ID))
+spID<-ggplot(forID,aes(x=IDrank,y=ID))+geom_point(size=3)+
+  labs(x="Plant Species",y="Bird Effects\nlog(Control/Bird exclusion")+
+  scale_x_discrete(limits = rev(levels(IDrank)))+
+  geom_hline(yintercept=0,lty="dashed")+
+  geom_errorbar(aes(ymin=ID-IDse,ymax=ID+IDse),width=.2)+
+  theme_minimal()
+spID
+```
+###Direct vs Indirect Defense  
+Direct defense = arthropod density in bird exclusion   
+To calculate LRR bird effects and direct defense both using the bird exclusion treatment and avoid spurrious correlation, 4 plants were randomly selected from the bird exclusion treatment of each plant species. These were assigned to be used exclusively for the LRR and the remaining plants to calculate mean arthropod density for Direct Defense. This was acheived using 'sample', and assigning 'group' variables (DD, ID, or C), saved in the "CSS_data_groups.csv" datasheet. This 'group' variable was then used to create a new df using 'dcast' in 'reshape2' to create separate columns for each 'group' category for each plant species to generate the means for arthropod density in control, bird exclusion, and to calculate LRR bird effects.  
+<br>  
+
+```{r,IDvsDD}
+IDvsDD<-lm(ID~T.x,data=forID)
+summary(IDvsDD)
+IDDD<-ggplot(forID,aes(x=T.x,y=ID))+geom_point(size=3)+
+  geom_text(aes(label=species),hjust=-.25,vjust=-.5)+
+  geom_errorbar(aes(ymin=ID-IDse,ymax=ID+IDse),width=.2)+geom_errorbarh(aes(xmin=T.x-Tse,xmax=T.x+Tse))+
+  geom_smooth(method="lm",se=F,lty="dashed",color="grey")+theme_minimal()
+IDDD
+
+```
+
